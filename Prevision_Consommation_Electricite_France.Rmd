@@ -1,0 +1,1158 @@
+---
+title: "Analyse de la consommation d'électricité en France"
+subtitle: "Mémoire M2 IFMA Séries temporelles"
+author: "Céline Nguyen-Tu, Jimmy Ly, Dimitrij Muller, Aras Chaigne"
+abstract: La consommation d'énergie, en particulier d'électricité, est un indicateur crucial de l'activité économique et sociale d'un pays. En France, c'est une source d'énergie qui joue un rôle fondamental dans la vie quotidienne des citoyens et dans le fonctionnement des industries. Comprendre les tendances, les variations saisonnières et les anomalies potentielles dans la consommation d'électricité est essentiel pour une planification énergétique efficace, la gestion des ressources et la mise en œuvre de politiques énergétiques durables. Ce projet vise à analyser les séries temporelles de la consommation d'électricité en France. Les objectifs spécifiques incluent la compréhension des tendances de consommation des Français sur les dernières années, une modélisation ajustée de cette dernière en vue de la prévision de la consommation future.
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 1
+    number_sections: true
+    latex_engine: xelatex
+    extra_dependencies: ["hyperref"]
+date: "Janvier 2025"
+header-includes:
+- \usepackage[french]{babel}
+- \usepackage{tocloft}
+- \setlength{\cftbeforesecskip}{3pt}
+- \usepackage{float}
+- \floatplacement{table}{H}
+kableExtra:
+  latex_options: "hold_position"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+getwd()
+setwd("/Users/celinenguyen/Documents/M2 IFMA/Séries chronologiques/Projet")
+```
+```{r libraries, include=F}
+#library(readr)
+#library(lattice)
+#library(stringr)
+#library(ts.extend)
+#install.packages("dplyr")
+#install.packages("tseries")
+#install.packages("gridExtra")
+#install.packages("kableExtra")
+#install.packages("broom")
+#install.packages("stargazer")
+library(magrittr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(tseries)
+library(zoo)  # For rolling functions
+library(stats)
+library(forecast)
+library(grid)
+library(gridExtra)
+library(broom)
+library(kableExtra)
+library(stargazer)
+```
+
+# Présentation des données
+
+Les données que nous avons choisi d'analyser sont les données de consommation d'électricité en France métropolitaine, hors Corse. Notre jeu de données couvre la période de 2012 à 2024 et provient du site [data.gouv.fr](https://www.data.gouv.fr/fr/datasets/consommation-quotidienne-brute/#/resources).
+
+Le jeu de données comprend plusieurs variables que nous considérerons pour analyser les tendances de consommation. Les variables essentielles pour notre analyse sont: 
+\begin{itemize}
+  \item Horodatage : Indique la date et l'heure de chaque enregistrement de la consommation, avec une granularité de 30 minutes. 
+  \item Consommation d'électricité (MW) : Représente la consommation brute d'électricité mesurée en mégawatts (MW) pour chaque intervalle de 30 minutes.
+  \item Statut des données : Indique si les données sont définitives ou intermédiaires. Les années 2012 à 2020 sont au statut définitif, signifiant qu'elles ont été vérifiées et validées par des équipes terrain. Les données de 2021 à 2024 sont au statut intermédiaire, donc susceptibles de modifications ultérieures.
+\end{itemize}
+
+Pour la modélisation, nous avons divisé les données en ensembles d'entraînement et de test. Les données définitives (2012-2020) constituent l'ensemble d'entraînement, tandis que les données intermédiaires (2021-2024) forment l'ensemble de test. Cette séparation permet d'évaluer la capacité du modèle à généraliser sur des données récentes des tendances de consommation.
+Nous tiendrons compte du fait que les données de 2021 à 2024, étant intermédiaires et susceptibles de modifications, peuvent contenir des anomalies. Cela pourrait affecter l'évaluation des performances du modèle, car les prédictions seraient comparées à des données potentiellement inexactes.
+
+Nous avons agrégé les données à une échelle mensuelle pour lisser les variations quotidiennes et hebdomadaires. Cela nous permet de mieux identifier les tendances saisonnières et annuelles qu'avec une granularité plus courte. Cette approche réduit le bruit dans les données directement impactées par des variables exogènes comme la température, les weekends et les jours de vacances, et permet une analyse plus claire des schémas de consommation à long terme. Cette granularité est également plus visible sur un graphique à long terme.
+
+```{r load and preprocess, echo=FALSE}
+current_path <- getwd()
+file_name <- "consommation-quotidienne-brute.csv"
+file_path <- file.path(current_path, file_name)
+my_data <- read.csv(file_path, sep=";", stringsAsFactors=FALSE)
+my_data <- my_data %>%
+  rename(
+    date_heure = Date...Heure,
+    date_original = Date,
+    heure = Heure,
+    conso_gaz_grtgaz = Consommation.brute.gaz..MW.PCS.0.C....GRTgaz,
+    statut_grtgaz = Statut...GRTgaz,
+    conso_gaz_terega = Consommation.brute.gaz..MW.PCS.0.C....Teréga,
+    statut_terega = Statut...Teréga,
+    conso_gaz_totale = Consommation.brute.gaz.totale..MW.PCS.0.C.,
+    conso_elec_rte = Consommation.brute.électricité..MW....RTE,
+    statut_rte = Statut...RTE,
+    conso_totale = Consommation.brute.totale..MW.
+  ) %>%
+  mutate(
+    date_heure = ymd_hms(date_heure),
+    date_parsed = dmy(date_original),
+    conso_gaz_grtgaz = as.numeric(conso_gaz_grtgaz),
+    conso_gaz_terega = as.numeric(conso_gaz_terega),
+    conso_gaz_totale = as.numeric(conso_gaz_totale),
+    conso_elec_rte = as.numeric(conso_elec_rte),
+    conso_totale = as.numeric(conso_totale),
+    statut_grtgaz = as.factor(statut_grtgaz),
+    statut_terega = as.factor(statut_terega),
+    statut_rte = as.factor(statut_rte)
+  )
+#head(my_data)
+```
+```{r monthly dataset, fig.width=10, fig.height=6, out.width="100%", echo=FALSE}
+# Create the monthly dataset
+
+monthly_data <- my_data %>%
+  mutate(
+    month_start = floor_date(date_heure, "month")
+  ) %>%
+  group_by(month_start) %>%
+  summarize(
+    monthly_elec = sum(conso_elec_rte, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+monthly_data <- monthly_data %>%
+  filter(monthly_elec > 200000)
+
+train_cutoff <- ymd("2021-01-01")
+
+monthly_data <- monthly_data %>%
+  mutate(
+    set_type = if_else(month_start < train_cutoff, "Train", "Test")
+  )
+
+p1 <- ggplot(monthly_data, aes(x = month_start, y = monthly_elec, color = set_type)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Monthly Electricity Consumption (Train vs. Test)",
+    x = "Month",
+    y = "Monthly Electricity (MW)",
+    color = "Set"
+  ) +
+  theme_minimal()
+
+p2 <- ggplot(monthly_data, aes(x = monthly_elec)) +
+  geom_histogram(bins = 30, fill = "blue", color = "white") +
+  labs(
+    title = "Histogram of Monthly Electricity",
+    x = "Monthly Elec (MW)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+p3 <- ggplot(monthly_data, aes(y = monthly_elec)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(
+    title = "Boxplot of Monthly Electricity",
+    y = "Monthly Elec (MW)"
+  ) +
+  theme_minimal()
+
+grid.arrange(
+  p1, 
+  arrangeGrob(p2, p3, ncol = 2), 
+  nrow = 2, heights = c(1, 1))
+```
+```{r daily dataset, echo=FALSE}
+#create the daily dataset
+daily_data <- my_data %>%
+  mutate(day_start = floor_date(date_heure, "day")) %>%  # or as.Date(date_heure)
+  group_by(day_start) %>%
+  summarize(
+    daily_elec = sum(conso_elec_rte, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+daily_data <- daily_data %>%
+  filter(daily_elec > 200000)
+
+train_cutoff <- ymd("2022-07-01")
+
+daily_data <- daily_data %>%
+  mutate(
+    set_type = if_else(day_start < train_cutoff, "Train", "Test")
+  )
+
+p1 <- ggplot(daily_data, aes(x = day_start, y = daily_elec, color = set_type)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(
+    title = "Daily Electricity Consumption (Train vs. Test)",
+    x = "Date",
+    y = "Daily Electricity (MW)",
+    color = "Set"
+  ) +
+  theme_minimal()
+
+p2 <- ggplot(daily_data, aes(x = daily_elec)) +
+  geom_histogram(bins = 50, fill = "blue", color = "white") +
+  labs(
+    title = "Histogram of Daily Electricity",
+    x = "Daily Elec (MW)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+p3 <- ggplot(daily_data, aes(y = daily_elec)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(
+    title = "Boxplot of Daily Electricity",
+    y = "Daily Elec (MW)"
+  ) +
+  theme_minimal()
+
+# grid.arrange(
+#   p1, 
+#   arrangeGrob(p2, p3, ncol = 2), 
+#   nrow = 2, heights = c(1, 1))
+```
+```{r formatting and data selection for training and testing, echo=FALSE}
+# Convert time column to date format
+monthly_data$month_start <- as.Date(monthly_data$month_start)
+
+# Filter to get training data
+train_data <- monthly_data %>% filter(set_type == "Train")
+test_data <- monthly_data %>% filter(set_type == "Test")
+
+# Get starting date of training data
+train_start_year <- as.numeric(format(train_data$month_start[1], "%Y"))
+train_start_month <- as.numeric(format(train_data$month_start[1], "%m"))
+train_start_date <- c(train_start_year, train_start_month)
+test_start_year <- as.numeric(format(test_data$month_start[1], "%Y"))
+test_start_month <- as.numeric(format(test_data$month_start[1], "%m"))
+test_start_date <- c(test_start_year, test_start_month)
+monthly_freq <- 12
+```
+
+L’histogramme révèle que la consommation mensuelle se situe entre $6×10^7$ MW et $8×10^7$ MW. La distribution possède une queue à droite qui indique la présence de valeurs de consommation plus élevées mais de plus en plus rares. On retrouve des pics sur la queue de la distribution au-delà de $1×10^8$ MW, probablement liés à des événements spécifiques qui ont nécessité plus d'électricité. Sans considérer ces événements rares, la consommation semble suivre une loi gamma.
+
+Le boxplot montre que la médiane est légèrement supérieure à $7.5×10^7$ MW. Les 50 % des valeurs centrales, représentés par la boîte, se situent entre $6.5×10^7$ MW et $9×10^7$ MW, donc la distribution est plutôt concentrée, l'écart-type est faible. Nous n'observons aucune valeur aberrante de consommation.
+
+# Analyse préliminaire
+
+Dans cette section, nous allons étudier la structure et la stationnarité de la consommation d'électricité en France, une étape essentielle avant de passer à la modélisation. En effet, elle est importante car la plupart des modèles de séries temporelles présupposent que la série est stationnaire. Si une série est non stationnaire, elle doit être rendue stationnaire avant de pouvoir être modélisée efficacement. Cette première analyse permettra  également de choisir une ou plusieurs approches adaptées à notre problème.
+
+Commençons par utiliser des visualisations graphiques de la série afin de repérer visuellement les tendances ou cycles qui pourraient indiquer une non-stationnarité. Visualisons les données de l'échantillon d'entraînement :
+
+```{r initial plot, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Plot the data for visual inspection
+plot(x = train_data$month_start, y = train_data$monthly_elec, type = "l", col = "blue", lwd = 2, xlab = "", ylab = "", main = "Monthly Electricity Consumption", cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+box(col = "darkgray")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+legend("topright", legend = c("Values"), col = c("blue"), lty = c(1), lwd = 2, cex = 0.7, bty = "n")
+```
+À première vue, une saisonnalité se dégage de la courbe de consommation d'électricité. Cette observation était anticipée en raison du contexte et est expliquée par les variations des besoins énergétiques dûs aux températures et aux durées des journées dans les régions tempérées comme en France. Les variations saisonnières apparaissent à peu près à la même amplitude. La série oscille autour d'une moyenne non nulle représentant un signe de stationnarité et on n'observe pas de rupture structurelle apparente (changements soudains dans la tendance ou la variance).
+
+On dispose de plusieurs outils et métriques pour vérifier la caractéristique de stationnarité. Les moyenne et variance glissantes ainsi que la fonction d'autocorrélation (ACF) sont des indicateurs de la stationnarité. En complément, on utilisera le test de Dickey-Fuller augmenté (ADF) et le test KPSS pour vérifier formellement le caractère stationnaire, bien qu'ils comportent certaines limites. Cette analyse permettra de déterminer s'il est nécessaire de transformer ou de stationnariser la série avant la modélisation mais également s'il est pertinent d'en extraire une partie tendancielle et saisonnière avant de modéliser la composante résiduelle stationnaire.
+
+**Test de Dickey-Fuller Augmenté** \newline
+Le test de Dickey-Fuller Augmenté (ADF) est un test statistique utilisé pour vérifier la stationnarité d'une série temporelle. C'est une extension du test de Dickey-Fuller qui inclut des termes additionnels pour capturer des dynamiques plus complexes. La série est modélisée comme :
+$$
+\Delta y_t = \beta_0 + \beta_1 y_{t-1} + \sum_{i=1}^{p} \alpha_i \Delta y_{t-i} + \varepsilon_t
+$$
+où $\Delta y_t = y_t - y_{t-1}$ est la différence de la série à l’instant $t$, $y_{t-1}$ est la valeur de la série à l’instant $t-1$, $\alpha_i$ sont les coefficients du modèle autorégressif pour les lags passés et $\varepsilon_t$ est le terme d’erreur ou résidu. \newline
+La statistique de test d’ADF est fondée sur l’estimation du coefficient $\beta_1$ dans ce modèle autorégressif. L’idée est de tester si $\beta_1 = 0$ en utilisant la statistique de la régression $t(\beta_1)$, qui est obtenue par la formule :
+$$
+t(\beta_1) = \frac{\hat{\beta_1}}{SE(\hat{\beta_1})}
+$$
+où $\hat{\beta_1}$ est l’estimation du coefficient $\beta_1$ de la régression et $SE(\hat{\beta_1})$ est l’erreur standard de $\hat{\beta_1}$. \newline
+- Hypothèse nulle $H_0$ : La série temporelle a une racine unitaire, c'est-à-dire qu'elle n'est pas stationnaire. \newline
+- Hypothèse alternative $H_1$ : La série temporelle est stationnaire.
+
+**Test KPSS (Kwiatkowski-Phillips-Schmidt-Shin)** \newline
+Le test KPSS est un test statistique utilisé pour vérifier la stationnarité d'une série temporelle. Contrairement au test de Dickey-Fuller, le test KPSS a comme hypothèse nulle que la série est stationnaire autour d'une moyenne ou d'une tendance déterministe. La série est modélisée comme :
+$$
+y_t = \mu + \nu_t + \varepsilon_t
+$$
+où $\mu$ est la constante de la tendance, $\nu_t$ est une tendance déterministe (ou une moyenne constante pour une série sans tendance) et $\varepsilon_t$ est le terme d’erreur blanc (stationnaire et indépendant). \newline
+La statistique de test calculée est la suivante :
+$$
+S = \frac{1}{n} \sum_{t=1}^{n} \hat{\varepsilon}_t^2
+$$
+où $\hat{\varepsilon}_t$ est l’estimation des résidus du modèle de tendance. \newline
+- Hypothèse nulle $H_0$ : La série temporelle est stationnaire (soit autour d'une moyenne, soit autour d'une tendance déterministe). \newline
+- Hypothèse alternative $H_1$ : La série temporelle a une racine unitaire, c'est-à-dire qu'elle n'est pas stationnaire.
+
+Analysons la stationnarité de la série temporelle de la consommation d'électricité :
+
+```{r check_stationarity function, fig.width=10, fig.height=7, out.width="100%", echo=FALSE}
+check_stationarity <- function(data, time_col, value_col, title_prefix) {
+  # Compute rolling mean and rolling variance for visual inspection
+  data <- data %>%
+    mutate(rolling_mean = rollmean(!!sym(value_col), k = 12, fill = NA),
+           rolling_variance = rollapply(!!sym(value_col), width = 12, FUN = var, align = "center", fill = NA))
+  
+  layout(matrix(c(1, 1, 2, 3), nrow = 2, ncol = 2, byrow = TRUE), widths = c(3, 2))
+  par(mar = c(4, 6, 2, 2), mgp = c(3, 0.7, 0))
+  
+  # Plot initial series with rolling mean
+  plot(x = data[[time_col]], y = data[[value_col]], type = "l", col = "blue", lwd = 2, xlab = "", ylab = "", main = paste(title_prefix, "with Rolling Mean"), cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+  lines(x = data[[time_col]], y = data[["rolling_mean"]], col = "red", lwd = 2)
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+  legend("topright", legend = c("Values", "Rolling Mean"), col = c("blue", "red"), lty = c(1), lwd = 2, cex = 0.7, bty = "n")
+  
+  # Plot rolling variance
+  plot(x = data[[time_col]], y = data[["rolling_variance"]], type = "l", col = "darkgreen", lwd = 2, xlab = "", ylab = "", main = paste("Rolling Variance of", title_prefix), cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+  legend("topright", legend = c("Rolling Mean"), col = c("darkgreen"), lty = c(1), lwd = 2, cex = 0.7, bty = "n")
+
+  # ACF plot
+  par(mar = c(4, 2, 2, 2))
+  acf_results <- acf(na.omit(data[[value_col]]), plot = FALSE)
+  plot(acf_results, xlab = "", ylab = "", main = "", cex.main = 0.3, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE, xlim = c(1, max(acf_results$lag)), ylim = c(min(acf_results$acf[-1]), max(acf_results$acf[-1])))
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Lag", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("ACF", side = 2, line = 2, cex = 0.6, col = "black") 
+  mtext(paste("ACF of", title_prefix), font = 2, side = 3, line = 0.5, cex = 0.8, col = "black")
+  
+  # ADF and KPSS tests
+  suppressWarnings(adf_result <- adf.test(na.omit(data[[value_col]]), alternative = "stationary"))
+  cat("ADF Test on", title_prefix, "p-value:", adf_result$p.value, "  \n")
+  suppressWarnings(kpss_result <- kpss.test(na.omit(data[[value_col]]), null = "Level"))
+  cat("KPSS Test on", title_prefix, "p-value:", kpss_result$p.value, "  \n  \n")
+}
+```
+
+```{r stationarity of initial data, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results = 'asis'}
+# Stationarity check using plots and statistical tests
+check_stationarity(train_data, "month_start", "monthly_elec", "Monthly Electricity Consumption")
+```
+
+La moyenne glissante semble suivre une droite indiquant une très légère tendance linéaire. La forte composante saisonnière est confirmé par le graphe ACF montrant des autocorrélations significatives à des lags multiples de 12 mois. Puisque l'ACF ne tend pas rapidement vers zéro, on ne peut pas confirmer la stationnarité. La p-value du test ADF (p-value = 0.01 < 0.005) rejette l'hypothèse de non-stationnarité et la p-value du test KPSS (p-value = 0.1 > 0.005) ne rejette pas l'hypothèse de stationnarité. Cependant, ces tests sont influencés par une forte saisonnalité stable et prévisible, et peuvent ne pas détecter correctement la non-stationnarité dans ce cas. C'est pourquoi leur résultats sont contre-intuitifs et contraires à l'analyse de ACF. Néanmoins, cela nous donne l'indication que la série pourrait être stationnaire après ajustement de la saisonnalité, comme une différenciation saisonnière ou l'extraction de la composante saisonnière. 
+
+Nous pouvons alors envisager plusieurs approches de modélisation : \newline
+1. Il est possible d'appliquer une différenciation saisonnière pour tenter de rendre la série stationnaire et ensuite utiliser un modèle de type ARMA/ARIMA. Cependant, cela entraîne une perte d'informations sur la tendance et la saisonnalité, ce qui peut être utile pour l'analyse et l'interprétation du modèle. De plus, cette approche peut être inefficace si la saisonnalité est évolutive, ce que l'on suppose à priori au vu des facteurs exogènes pouvant influencer la consommation. \newline
+2. Une autre approche consiste à décomposer la série pour modéliser séparément la tendance, la saisonnalité et les résidus stationnaires. Cette méthode peut offrir une meilleure compréhension de la série et un meilleur ajustement. Elle permet de capturer des structures temporelles plus sophistiquées et peut améliorer la précision des prévisions. De plus, extraire la tendance et la saisonnalité permet souvent d'appliquer des modèles plus simples à ajuster comme AR, MA ou ARMA. \newline
+3. Le modèle SARIMA est particulièrement adapté aux séries temporelles présentant des saisons. Il permet de modéliser simultanément la tendance, la saisonnalité et les résidus, tout en évitant la nécessité de stationnariser manuellement la série. Cette approche combine la capacité de capturer les composantes essentielles de la série temporelle tout en facilitant le processus de modélisation. Ce modèle est en revanche limité pour des saisonnalités évolutives. 
+
+Les deux dernières approches seront étudiées dans cette étude afin d'en déduire plusieurs modèles efficaces pour la prévision. Cette analyse permettra à la fois de mettre en pratique une large gamme de notions étudiées dans le cadre du cours et de choisir un modèle de prédiction le plus performant.
+
+# Modélisation par décomposition additive
+
+## Composantes tendance-saisonnalité-résidus
+
+Cette étape nous permet d'identifier clairement les éléments déterministes (tendance et saisonnalité) et les éléments aléatoires (résidus) de la série. La tendance reflète la direction générale de la série, qui peut être croissante, décroissante ou plate. La saisonnalité capture les variations régulières et récurrentes dans la série, généralement liées à des facteurs externes comme la période de l'année, le mois ou la semaine. Enfin, les résidus représentent les fluctuations irrégulières de la série, qui ne peuvent pas être expliquées par la tendance ou la saisonnalité. La décomposition est essentielle pour mieux comprendre les dynamiques sous-jacentes de la série et pour permettre une modélisation plus adaptée et précise de ses composants.
+
+Puisque l'amplitude des variations saisonnières reste constante sur toute la durée de la série, une décomposition additive est appropriée :
+$$X_t = T_t + S_t + R_t$$
+où $X_t$ est la série temporelle de la consommation d'électricité, $T_t$ est la composante de tendance, $S_t$ est la composante de saisonnière qui peut être régulière (fixe) ou évolutive et $R_t$ est la composante résiduelle ou l'erreur.
+
+Les techniques pour estimer la tendance et la saisonnalité peuvent être semi-paramétriques (typiquement régression linéaire) ou non-paramétriques (moyenne mobiles simples ou pondérées, régressions locales, régressions par splines, lissages exponentiels, convolution par un noyau, décomposition dans une base d’ondelettes,...). Les résidus sont les valeurs restantes après avoir enlevé la tendance et la saisonnalité. Idéalement, ces résidus devraient être proches de 0 et ne montrer aucune structure discernable.
+
+
+### Modèle 1 - Méthode STL
+
+La méthode STL (Seasonal-Trend decomposition using Loess) est une méthode de décomposition qui utilise la technique LOESS pour séparer une série chronologique en ses composantes de tendance, saisonnières et résiduelles. LOESS (Locally Estimated Scatterplot Smoothing) ou LOWESS (Locally Weighted Estimated Scatterplot Smoothing) est une méthode de régression non paramétrique utilisée pour lisser les données.
+
+La régression localisée LOESS s’obtient en fixant une taille de fenêtre et on fait une régression linéaire ou polynomiale de $X$ dans la fenêtre que l’on fait glisser. Cette méthode ne suppose pas connues les fonctions pouvant composer la série (comme dans le cas de la régression), mais juste une certaine régularité de la fonction. La fenêtre doit être suffisamment large pour capturer les tendances à long terme mais pas trop large pour ne pas lisser des cycles saisonniers.
+
+Pour chaque point d'intérêt $x_i$ de la série de donnée, les points de données voisins dans une fenêtre définie sont utilisés pour ajuster un modèle local. Soit $(x_j, y_j)$ les points de données voisins de $x_i$ dans une fenêtre $W$. Le modèle de régression linéaire local est de la forme :
+$$ y_j \approx \beta_0(x_i) + \beta_1(x_i) (x_j - x_i) $$
+où $\beta_0(x_i)$ et $\beta_1(x_i)$ sont les coefficients de la régression locale autour de $x_i$.
+
+Chaque point $x_j$ dans la fenêtre $W$ est pondéré par une fonction de poids  $w(x_j, x_i)$ (par exemple, la fonction tricube) qui dépend de la distance entre $x_j$ et $x_i$. Puis, les coefficients $\beta_0(x_i)$ et $\beta_1(x_i)$ sont estimés en minimisant la somme pondérée des carrés des résidus :
+$$ \min_{\beta_0(x_i), \beta_1(x_i)} \sum_{j \in W} w(x_j, x_i) \left( y_j - \beta_0(x_i) - \beta_1(x_i)(x_j - x_i) \right)^2 $$
+Les valeurs lissées $\hat{y_i}$ pour chaque $x_i$ sont obtenues en évaluant le modèle local ajusté :
+$$ \hat{y_i} = \beta_0(x_i) $$
+Ce processus permet de produire une courbe lisse qui s’adapte localement aux variations des données. Pour capturer la saisonalité, le lissage LOESS est appliqué sur les sous-séries saisonnières. Dans le cas de données mensuelles, ce sont les données correspondant au même mois pour chaque année. La méthode STL consiste à effectuer un lissage local de la tendance et de la saisonnalité, itératant ces procédures jusqu'à convergence. Cette technique permet de capturer les variations à court et à long terme des données, ce qui en fait une méthode robuste pour décomposer les séries temporelles présentant des modèles complexes et non linéaires. 
+
+Cependant, bien que cette méthode soit efficace pour identifier et comprendre les structures sous-jacentes, elle ne permet pas directement de faire des prévisions puisqu'elle repose sur des techniques de lissage non paramétriques. Pour effectuer des prévisions, il sera nécessaire d’adopter des modèles supplémentaires pour chaque composante.
+
+La fonction `stl` de `stats` permet d'effectuer cette décomposition et propose également d'extraire une saisonnalité supposée régulière. Dans ce cas, le lissage est remplacé par une moyenne de groupe. On peut donc comparer les séries des saisonnalités obtenues dans les cas où l'on suppose la saisonnalité régulière ou évolutive. Les décompositions complètes calculées par des fonctions `R` sont disponibles en annexes.
+
+```{r m1 stl decomposition, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Compute additive decomposition using stl() with seasonality as periodic and evolving
+monthly_elec_ts <- ts(train_data$monthly_elec, start = train_start_date, frequency = monthly_freq)
+stl_evol <- stl(monthly_elec_ts, s.window = 12)
+stl_fixed <- stl(monthly_elec_ts, s.window = "periodic")
+train_data <- train_data %>%
+  mutate(m1_trend_evol = as.numeric(stl_evol$time.series[, "trend"]),
+         m1_seasonal_evol = as.numeric(stl_evol$time.series[, "seasonal"]),
+         m1_residuals_evol = as.numeric(stl_evol$time.series[, "remainder"]),
+         m1_trend = as.numeric(stl_fixed$time.series[, "trend"]),
+         m1_seasonal = as.numeric(stl_fixed$time.series[, "seasonal"]),
+         m1_residuals = as.numeric(stl_fixed$time.series[, "remainder"]))
+
+# Compare fixed and evolving seasonality
+plot(x = train_data$month_start, y = train_data$m1_seasonal_evol, type = "l", col = "blue", lwd = 2, xlab = "", ylab = "", main = "Evolving and Fixed Seasonality extracted using STL", cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+lines(x = train_data$month_start, y = train_data$m1_seasonal, col = "red", lwd = 2)
+box(col = "darkgray")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+legend("topright", legend = c("Evolving", "Fixed"), col = c("blue", "red"), lty = c(1), lwd = 2, cex = 0.7, bty = "n")
+```
+
+On observe que la saisonnalité est légèrement évolutive au fil des années. En particulier, cette évolution semble linéaire et est plus visible au niveau des creux et des pics. Pour vérifier si cette évolution est statistiquement significative, on introduit un modèle de régression linéaire avec un terme d'interaction entre les mois et les années (on suppose que l’effet de l’année sur la saisonnalité peut varier en fonction du mois) :
+$$\begin{aligned} &S_t = \beta_0 + \beta_1 \cdot CosMonth_t + \beta_2 \cdot Year_t + \beta_3 \cdot (CosMonth_t \times Year_t) + \varepsilon_t \\
+&CosMonth_t = \cos(2\pi \cdot Month_t / 12)\end{aligned}$$
+où $S_t$ est la composante saisonnière de la consommation d’électricité pour le mois $t$, $CosMonth_t$ est une variable continue qui indique le mois de l’année, $Year_t$ est une variable continue qui représente l’année (pour tenir compte de l’évolution au fil du temps), $CosMonth_t \times Year_t$ est un terme d’interaction entre les mois et les années pour capturer les effets évolutifs de la saisonnalité et $\varepsilon_t$ est l’erreur (résidus) à chaque point temporel.
+
+Dans ce modèle, $CosMonth_t$ représente la transformation trigonométrique appliquée à la variable $Month_t$. Elle permet de capturer les variations saisonnières sous forme de cycles réguliers sur 12 mois, ce qui est approprié car on suppose une relation continue cyclique entre les mois et la consommation d'électricité.
+
+```{r m1 check evolution of seasonality, echo=FALSE, results='asis'}
+# Create month and year variables
+train_data$year <- as.numeric(format(train_data$month_start, "%Y"))
+train_data$month <- as.numeric(format(train_data$month_start, "%m"))
+
+# Dynamic regression with using variables month and tendency -> conclusion : tendency is not significant enough to consider seasonality as evolving
+train_data$cos_month <- cos(2 * pi * train_data$month / 12)
+m1_seasonal_model <- lm(m1_seasonal_evol ~ cos_month * year, data = train_data)
+anova_model <- anova(m1_seasonal_model)
+anova_table <- tidy(anova_model)
+kable(anova_table, format = "latex", booktabs = TRUE, caption = "Table ANOVA")
+
+# Remove evolving seasonality from dataframe
+train_data <- train_data %>% select(-m1_trend_evol, -m1_seasonal_evol, -m1_residuals_evol, -cos_month)
+rm(m1_seasonal_model)
+```
+Avec l'analyse de la variance (ANOVA), on évalue l’effet global des facteurs et de leur interactions. On observe que le facteur $Year$ a une F-statistic nulle et n'est pas significatif (p-value = 0.9991) dans le modèle. De manière similaire, le terme d'interaction a une F-statistic très proche de zéro (F-value = 0.00014) et indique l'absence de significativité (p-value = 0.9904). Ainsi, la saisonnalité est principalement expliquée par le motif cyclique des mois et son évolution subtile d’une année à l’autre n’est pas suffisamment prononcée pour être statistiquement significative dans ce modèle. 
+
+Cela confirme que l'on peut supposer la saisonnalité régulière pour notre modèle par décomposition, mais également qu'il est pertinent envisager une approche par modélisation SARIMA. À présent, on ne conserve que la décomposition STL avec saisonalité régulière.
+
+La composante tendancière étant approximativement linéaire, on peut la modéliser en ajustant un modèle de régression linéaire sur le temps, ce qui permettra des prévisions.
+$$T_t = \beta_0 + \beta_1 \cdot Date_t + \varepsilon_t$$
+```{r m1 trend modelling,fig.width=10, fig.height=3, out.width="100%", echo=FALSE}
+# Modelling trend with linear regression
+m1_trend_model <- lm(m1_trend ~ month_start, data = train_data)
+# Model print
+model_tidy <- tidy(m1_trend_model)
+kable(model_tidy, format = "latex", booktabs = TRUE, caption = "Coefficients du modèle linéaire")
+model_summary <- summary(m1_trend_model)
+global_stats <- data.frame(
+  R_squared = model_summary$r.squared,
+  Adjusted_R_squared = model_summary$adj.r.squared,
+  F_statistic = model_summary$fstatistic[1],
+  p_value_F_statistic = pf(model_summary$fstatistic[1], 
+                            model_summary$fstatistic[2], 
+                            model_summary$fstatistic[3], 
+                            lower.tail = FALSE)
+)
+kable(global_stats, format = "latex", booktabs = TRUE, caption = "Statistiques globales du modèle linéaire")
+```
+Les p-values associées aux coefficients sont inférieures au seuil de significativité de 5% (< 2e-16), ce qui indique que ces coefficients sont statistiquement significatifs. Cela signifie qu’il existe une relation robuste entre la variable indépendante (le temps) et la variable dépendante (la tendance). De plus, la F-statistic du modèle est élevée (106.7129), ce qui indique que le modèle global est significatif. Autrement dit, la régression linéaire capture bien la tendance dans les données. Dans ce contexte, n'avons pas besoin de vérifier l'hétéroscédasticité des résidus. En effet, le modèle reste valide pour capturer la composante de tendance car les résidus seront analysés et traités séparément dans la composante résiduelle du modèle global avec des modèles plus adaptés.
+
+Soit $T'_t$ la droite de régression modélisant la tendance, on peut réajuster la tendance et la composante résiduelle de sorte à récupérer les résidus de la régression linéaire dans la composante résiduelle mais en conservant la moyenne nulle de cette dernière. On obtient alors les composantes réajustées $\hat{T}_t$ et $\hat{R}_t$ :
+$$\begin{aligned}R'_t &=  R_t + T_t - T'_t = R_t + \varepsilon_t \\
+\hat{R}_t &= R'_t - \bar{R}'_t \qquad \text{et} \qquad \hat{T}_t = T'_t + \bar{R}'_t \\
+X_t &= \hat{T}_t + S_t + \hat{R}_t\end{aligned}$$
+```{r m1 plot decomposition, fig.width=10, fig.height=5, out.width="100%", echo=FALSE}
+# Adjusting trend and residual components
+train_data <- train_data %>%
+  mutate(m1_trend_adjust = as.numeric(predict(m1_trend_model, newdata = train_data)),
+         m1_residuals_adjust = m1_residuals + m1_trend - m1_trend_adjust,
+         m1_residuals_mean = mean(m1_residuals_adjust),
+         m1_residuals_adjust = m1_residuals_adjust - m1_residuals_mean,
+         m1_trend_adjust = m1_trend_adjust - m1_residuals_mean) %>% 
+  select(-m1_residuals_mean)
+
+# Plot decomposition results after adjustments
+par(mar = c(4, 6, 2, 6))
+plot(x = train_data$month_start, y = train_data$m1_trend, type = "l", lty = 2, col = "red", lwd = 2, xlab = "", ylab = "", ylim = c(min(train_data$m1_seasonal), max(train_data$m1_trend, train_data$m1_trend_adjust)), main = "Model 1 - Decomposition of Time Series", cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+lines(x = train_data$month_start, y = train_data$m1_trend_adjust, lty = 1, col = "red", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m1_seasonal, lty = 1, col = "green", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m1_residuals, lty = 2, col = "blue", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m1_residuals_adjust, lty = 1, col = "blue", lwd = 2)
+box(col = "darkgray")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+legend("topright", legend = c("Trend", "Seasonal", "Residuals"), col = c("red", "green", "blue"), lwd = 2, cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.15, 0.3), title = "Color")
+legend("topright", legend = c("Adjusted", "Raw"), lty = c(1, 2), col = "black", lwd = 2, cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.15, 0.55), title = "Line Type")
+```
+On peut maintenant analyser la stationnarité de la composante résiduelle ajustée.
+```{r m1 stationarity of residual component, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results = 'asis'}
+# Stationarity check using plots and statistical tests
+check_stationarity(train_data, "month_start", "m1_residuals_adjust", "Residual component of model 1")
+```
+
+La série des résidus oscille autour de zéro sans tendance apparente. Sa moyenne glissante reste proche de zéro et stable au fil du temps et sa variance glissante n’augmente pas ou ne diminue pas de manière significative au fil du temps. D'après l'ACF, les autocorrélations chutent à zéro dès le lag 1, cela suggère que les résidus sont indépendants et stationnaires. Les tests ADF et KPSS le confirment, car les p-values sont respectivement inférieures et supérieures à 0.05, ce qui permet de rejeter l’hypothèse d’une racine unitaire et de conclure à la stationnarité des résidus. Par conséquent, nous pouvons considérer que la décomposition a correctement capturé et isolé la tendance et la saisonnalité, et que les résidus peuvent être modélisés séparément à l’aide d’un modèle paramétrique adapté de type ARMA ou potentiellement SARIMA.
+
+
+### Modèle 2 - Décomposition manuelle
+
+En appliquant la méthode STL vue précédemment, on constate que les composantes tendance et saisonnière pourraient être extraites de manière simple et efficace sans utilisation de `stl`. La composante tendance, ayant une forme linéaire, peut être obtenue par une régression linéaire directe sur la série globale. De même, la saisonnalité, étant maintenant considérée comme régulière, peut être isolée en calculant la moyenne de groupe pour chaque mois. En décomposant manuellement la série temporelle avec ces deux techniques, on vise à comparer les résultats obtenus avec ceux de la méthode STL. Cette approche alternative permettra de vérifier la robustesse des prévisions et d’évaluer l’efficacité des deux méthodes de décomposition présentant des caractéristiques similaires.
+
+Cette fois, la régression linéaire se fait sur la série initiale $X_t$ et il n'est pas nécessaire que le modèle soit statistiquement significatif car il ne sert que d'estimateur de la tendance générale laissant les résidus qui incluent les composantes saisonnières et aléatoires :
+$$X_t = \beta_0 + \beta_1 \cdot Date_t + \varepsilon_t$$
+Elle permet d'isoler la tendance $T_t$ et la série détrendée $X^d_t$ est obtenue en soustrayant la tendance de la série initiale :
+$$\begin{aligned}T_t &= \beta_0 + \beta_1 \cdot Date_t \\
+X^d_t &= S_t + R_t = X_t - T_t \end{aligned}$$
+
+La moyenne de groupe, aussi connue sous le nom de moyenne conditionnelle ou moyenne par sous-groupes, consiste à calculer la moyenne des valeurs d’une série temporelle pour des périodes spécifiques (ici les mois) sur plusieurs cycles. Nos données étant mensuelle, le temps $t$ peut être représenté par le mois et l'année. Soit $i = 1, \dots, 12$ les mois de l'année et $j = 1, \dots, N$ où $N$ est le nombre d'années représentées, $X_{ij}$ est la valeur de la série pour le mois $i$ et l'année $j$. La moyenne de groupe pour le mois $i$ est définie comme :
+$$
+\bar{X}_j = \frac{1}{N} \sum_{i=1}^{N} X_{ij}
+$$
+Ainsi le vecteur $(\bar{X}_1, \bar{X}_2, \cdots, \bar{X}_{12})$ décrit le motif de saisonnalité $S_t$ et on obtient la composante résiduelle.
+$$R_t = X^d_t - S_t$$
+
+```{r m2 plot decomposition, fig.width=10, fig.height=5, out.width="100%", echo=FALSE}
+# Decompose the time series manually using a trend fitting approach
+# Trend decomposition using linear regression
+m2_trend_model <- lm(monthly_elec ~ month_start, data = train_data)
+train_data <- train_data %>%
+  mutate(m2_trend = predict(m2_trend_model),
+         m2_detrended = monthly_elec - m2_trend)
+
+# Seasonal decomposition using group averages
+train_data <- train_data %>%
+  group_by(month) %>%
+  mutate(m2_seasonal = mean(m2_detrended, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(m2_residuals = m2_detrended - m2_seasonal)
+
+# Plot decomposition results
+par(mar = c(4, 6, 2, 6))
+plot(x = train_data$month_start, y = train_data$m2_trend, type = "l", lty = 1, col = "red", lwd = 2, xlab = "", ylab = "", ylim = c(min(train_data$m2_seasonal), max(train_data$m2_trend)), main = "Model 2 - Decomposition of Time Series", cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+lines(x = train_data$month_start, y = train_data$m2_seasonal, lty = 1, col = "green", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m2_residuals, lty = 1, col = "blue", lwd = 2)
+box(col = "darkgray")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+legend("topright", legend = c("Trend", "Seasonal", "Residuals"), col = c("red", "green", "blue"), lwd = 2, cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.15, 0.3), title = "Color")
+```
+On analyse la stationnarité de la composante résiduelle.
+```{r m2 stationarity of residual component, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results = 'asis'}
+# Stationarity check on Residual component
+check_stationarity(train_data, "month_start", "m2_residuals", "Model 2 Residual component of decomposition")
+```
+Les résultats du diagnostic sont cohérents avec la méthode de décomposition STL. La composante résiduelle obtenue présente des propriétés similaires en termes de stationnarité. Ceci renforce la robustesse de notre analyse et la validité de notre approche pour isoler la composante tendance et saisonnière de la série temporelle.
+
+### Modèle 3 - Décomposition classique
+
+Une autre méthode de décomposition dite classique est elle, basée sur un modèle additif ou multiplicatif. La saisonnalité et la tendance sont extraites de manière fixe par la méthode des moyennes mobiles et la méthode de moyenne de groupe. Elle se fait par la fonction `decompose` de la librarie `stats`. Par défaut, le type de moyenne mobile utilisée est la moyenne mobile centrée :
+$$T_t = CMA_t = \frac{1}{k} \sum_{i=t-\left\lfloor \frac{k}{2} \right\rfloor}^{t+\left\lfloor \frac{k}{2} \right\rfloor} X_i$$
+où $CMA_t$ est la moyenne mobile centrée à l’instant $t$, $X_i$ est la valeur à l’instant $i$ et $k$ est la taille de la fenêtre (doit être impair pour que le calcul soit centré).
+
+Après extraction de la tendance, la saisonnalité est obtenue par moyenne de groupe puis est centrée pour obtenir la décomposition. La technique des moyennes mobiles ne peut pas capturer des changements subtils dans la saisonnalité ou des tendances non linéaires, ce qui la rend moins flexible que STL mais reste valable dans notre cas d'étude. En revanche, elle est plus rapide et moins coûteuse en calcul. La méthode `decompose` ne fonctionne correctement que si la série couvre des périodes complètes, ce qui est notre cas.
+
+Comme pour la méthode STL, on appliquera une régression linéaire à la composante de la tendance pour pouvoir faire des prévisions et on ajustera le modèle en conséquence :
+$$\begin{aligned} R'_t &=  R_t + T_t - T'_t \\
+\hat{R}_t &= R'_t - \bar{R}'_t \qquad \text{et} \qquad \hat{T}_t = T'_t + \bar{R}'_t \\
+X_t &= \hat{T}_t + S_t + \hat{R}_t\end{aligned}$$
+où $T'_t$ est la droite de régression de la tendance, $R'_t$ est la somme des résidus de la décomposition et de la régression, $\hat{R}_t$ est la composante résiduelle ajustée et $\hat{T}_t$ est la composante tendancière ajustée.
+
+```{r m3 plot decomposition, fig.width=10, fig.height=5, out.width="100%", echo=FALSE}
+# Compute additive decomposition using decompose()
+decomp_result <- decompose(monthly_elec_ts, type = "additive")
+train_data <- train_data %>%
+  mutate(m3_trend = as.numeric(decomp_result$trend),
+         m3_seasonal = as.numeric(decomp_result$seasonal),
+         m3_residuals = as.numeric(decomp_result$random))
+
+# Modelling trend with linear regression
+train_data_clean <- na.omit(train_data)
+m3_trend_model <- lm(m3_trend ~ month_start, data = train_data_clean)
+rm(train_data_clean)
+# Model validation
+#cat("Trend linear regression model")
+#summary(m3_trend_model)
+#plot(m3_trend_model)
+
+# Adjusting trend and residual components
+train_data <- train_data %>%
+  mutate(m3_trend_adjust = as.numeric(predict(m3_trend_model, newdata = train_data)),
+         m3_residuals_adjust = m3_residuals + m3_trend - m3_trend_adjust,
+         m3_residuals_mean = mean(na.omit(m3_residuals_adjust)),
+         m3_residuals_adjust = m3_residuals_adjust - m3_residuals_mean,
+         m3_trend_adjust = m3_trend_adjust - m3_residuals_mean) %>% 
+  select(-m3_residuals_mean)
+
+# Plot decomposition results after adjustments
+par(mar = c(4, 6, 2, 6))
+plot(x = train_data$month_start, y = train_data$m3_trend, type = "l", lty = 2, col = "red", lwd = 2, xlab = "", ylab = "", ylim = c(min(train_data$m3_seasonal), max(na.omit(train_data$m3_trend), train_data$m3_trend_adjust)), main = "Model 3 - Decomposition of Time Series", cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+lines(x = train_data$month_start, y = train_data$m3_trend_adjust, lty = 1, col = "red", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m3_seasonal, lty = 1, col = "green", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m3_residuals, lty = 2, col = "blue", lwd = 2)
+lines(x = train_data$month_start, y = train_data$m3_residuals_adjust, lty = 1, col = "blue", lwd = 2)
+box(col = "darkgray")
+grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+legend("topright", legend = c("Trend", "Seasonal", "Residuals"), col = c("red", "green", "blue"), lwd = 2, cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.15, 0.3), title = "Color")
+legend("topright", legend = c("Adjusted", "Raw"), lty = c(1, 2), col = "black", lwd = 2, cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.15, 0.55), title = "Line Type")
+```
+Il ne reste qu'à vérifier la stationnarité des résidus.
+```{r m3 stationarity of residual component, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results = 'asis'}
+# Stationarity check on Residuals using plots and statistical tests
+check_stationarity(train_data, "month_start", "m3_residuals", "Residual component of decomposition")
+```
+On obtient les mêmes conclusions que pour les précédents modèles. Ainsi, les analyses visuelles et statistiques des résidus issues des différentes techniques de décomposition indiquent que les résidus sont stationnaires. Ces résultats valident l’efficacité de nos techniques de décomposition et justifient leur utilisation pour la modélisation de la série de la consommation d'électricité. Les résidus peuvent désormais être modélisés séparément à l’aide de modèles appropriés pour des séries stationnaires, tels que les modèles ARMA ou SARIMA, afin de capturer les dynamiques résiduelles.
+
+## Modélisation de la composante résiduelle
+
+Pour modéliser les séries résiduelles stationnaires de nos modèles, on va analyser leur fonctions ACF et PACF afin de déterminer graphiquement les modèles candidats. Il s'agira alors de les appliquer à nos données et de comparer leurs performances grâce aux critères AIC et BIC. On pourra valider le modèle choisi par analyse de ses résidus. Afin de choisir le modèle adapté, l'introduction de cette section sera dédiée à quelques rappels théoriques sur les fonctions d'autocorrélation, les modèles ARMA et SARIMA et les techniques de validation de modèle qui seront employées.
+
+**Fonction ACVF** \newline
+La fonction d'autocovariance (ACVF) mesure la covariance entre les valeurs d’une série temporelle séparées par un retard $k$, c’est-à-dire leur dépendance linéaire brute. Soit $(X_t)_t$  avec  $t = 1, 2, \dots, T$, une série temporelle stationnaire avec espérance $\mu = \mathbb{E}[X_t]$, la fonction d'autocovariance d'ordre $k$, notée $\gamma_X(k)$, est définie par :
+$$
+\gamma_X(k) = \text{Cov}(X_t, X_{t+k}) = \mathbb{E}[(X_t - \mu)(X_{t+k} - \mu)]
+$$
+Pour une série temporelle $\{X_1, X_2, \dots, X_T\}$ de moyenne empirique $\bar{X} = \frac{1}{T} \sum_{t=1}^T X_t$, l’ACVF empirique d'ordre $k$ est donnée par :
+$$\hat{\gamma}_X(k) = \frac{1}{T} \sum_{t=1}^{T-k} (X_t - \bar{X})(X_{t+k} - \bar{X})$$
+
+
+**Fonction ACF** \newline
+La fonction d’autocorrélation (ACF) mesure la corrélation entre les valeurs d’une série temporelle à différents retards (lag). C'est une version normalisée de l’autocovariance. Soit $(X_t)_t$  avec  $t = 1, 2, \dots, T$, une série temporelle stationnaire de fonction d'autocovariance $\gamma_X$ telle que $\gamma_X(0) \neq 0$, la fonction autocorrélation d'ordre $k$, notée $\rho_X(k)$ est définie par :
+$$
+\rho_X(k) = \frac{\gamma_X(k)}{\gamma_X(0)}
+$$
+Pour une série temporelle $\{X_1, X_2, \dots, X_T\}$ de fonction d'autocovariance empirique $\hat{\gamma}_X$, l’ACF empirique d'ordre $k$ est donnée par :
+$$
+\hat{\rho}_X(k) = \frac{\hat{\gamma}_X(k)}{\hat{\gamma}_X(0)}
+$$
+
+**Fonction PACF** \newline
+La fonction d’autocorrélation partielle (PACF) est une extension de la fonction d’autocorrélation (ACF) qui mesure la relation entre une valeur d’une série temporelle et ses retards (lags) après avoir retiré l’effet des retards intermédiaires. Mathématiquement, elle correspond au coefficient de $X_{t+k}$ dans une régression linéaire où $X_t$ est expliqué par  $X_{t+1}, \dots, X_{t+k}$. Soit $(X_t)_t$  avec  $t = 1, 2, \dots, T$ une série temporelle stationnaire, la fonction d’autocorrélation partielle d’ordre $k$, notée $\phi_{k,k}$, est définie comme suit :
+$$
+\phi_{k,k} = \text{Cor}(X_t, X_{t-k} \mid X_{t-1}, X_{t-2}, \dots, X_{t-(k-1)})
+$$
+Pour une série temporelle $\{X_1, X_2, \dots, X_T\}$ de fonction d'autocorrélation empirique $\hat{\rho}_X$, la PACF empirique d'ordre $k$ est donnée par l'algorithme de Yule-Walker ou des régression successives :
+$$\hat{\phi}_{k,k} = \frac{\hat{\rho}_X(k) - \sum_{j=1}^{k-1} \hat{\phi}_{k-1,j} \hat{\rho}_X(k-j)}{1 - \sum_{j=1}^{k-1} \hat{\phi}_{k-1,j} \hat{\rho}_X(j)}$$
+où les $\hat{\phi}_{k-1,j}$ sont les PACF aux retards $j$ pour une série de longueur $k-1$.
+
+**Modèle AR($p$) (Auto Regressive)** \newline
+Un modèle autorégressif (AR) est un modèle de série temporelle qui utilise des observations passées (ou retards) de la série pour prédire les valeurs futures. Soit $X_t$ une série temporelle, un modèle autorégressif d’ordre $p$ (noté AR($p$)) est défini par l’équation suivante :
+$$X_t = \phi_1 X_{t-1} + \phi_2 X_{t-2} + \dots + \phi_p X_{t-p} + \varepsilon_t$$
+où $X_t$ est la valeur de la série à l’instant $t$, $\phi_1$, $\phi_2$, $\dots$, $\phi_p$  sont les coefficients du modèle, $X_{t-1}, X_{t-2}, \dots, X_{t-p}$  sont les valeurs retardées de la série, $p$ est l'ordre du modèle indiquant le nombre de valeurs retardées nécessaires pour prédire la valeur actuelle et $\varepsilon_t$ est un terme d’erreur aléatoire à l’instant  $t$, supposé être un bruit blanc, c’est-à-dire avec une moyenne nulle, une variance constante et non autocorrélé.
+
+Dans un modèle AR($p$), la dépendance est une combinaison linéaire des valeurs passées, entraînant une décroissance lente de l'ACF. Mais chaque valeur a une dépendance directe avec ses $p$ termes précédents, donc la PACF sera proche de zéro après le lag $p$.
+
+**Modèle MA($q$) (Moving Average)** \newline
+Un modèle de moyenne mobile (MA) est un modèle de série temporelle qui utilise les erreurs passées (ou termes de bruit) pour modéliser les valeurs actuelles de la série. Soit $X_t$ une série temporelle, un modèle de moyenne mobile d’ordre $q$ (noté MA(q)) est défini par l’équation suivante :
+$$
+X_t = \mu + \varepsilon_t + \theta_1 \varepsilon_{t-1} + \theta_2 \varepsilon_{t-2} + \dots + \theta_q \varepsilon_{t-q}
+$$
+où $X_t$ est la valeur de la série à l’instant t, $\mu$ est la moyenne de la série temporelle (dans le cas où la série est centrée autour de zéro, cette moyenne est souvent omise), $\theta_1, \theta_2, \dots, \theta_q$ sont les coefficients du modèle, $\varepsilon_{t-1}, \varepsilon_{t-2}, \dots, \varepsilon_{t-q}$ sont les termes d’erreur retardés, $q$ est l'ordre du modèle indiquant le nombre d'erreurs retardées nécessaires pour prédire la valeur actuelle et $\varepsilon_t$ est le terme d’erreur aléatoire à l’instant $t$, supposé être un bruit blanc, c’est-à-dire avec une moyenne nulle, une variance constante et non autocorrélé.
+
+Dans un modèle MA($q$), l'ACF est proche de zéro après le lag $q$ car les erreurs au-delà de $q$ ne sont pas corrélées et la PACF décroit lentement en raison de la dépendance des erreurs passées.
+
+**Modèle ARMA($p$,$q$) (Auto Regressive Moving Average)** \newline
+Un modèle autorégressif de moyenne mobile (ARMA) est un modèle de série temporelle qui combine les aspects des modèles autorégressifs (AR) et des modèles de moyenne mobile (MA). Il est utilisé pour capturer à la fois les dépendances linéaires avec les valeurs passées de la série temporelle et les dépendances avec les erreurs passées. Soit $X_t$ une série temporelle, un modèle ARMA d’ordre $p, q$ (noté ARMA($p$, $q$)) est défini par l’équation suivante :
+$$
+X_t = c + \phi_1 X_{t-1} + \phi_2 X_{t-2} + \dots + \phi_p X_{t-p} + \varepsilon_t + \theta_1 \varepsilon_{t-1} + \theta_2 \varepsilon_{t-2} + \dots + \theta_q \varepsilon_{t-q}
+$$
+où $X_t$ est la valeur de la série à l’instant $t$, $c$ est une constante, $\phi_1, \phi_2, \dots, \phi_p$ sont les coefficients autorégressifs du modèle, $\theta_1, \theta_2, \dots, \theta_q$ sont les coefficients de la moyenne mobile du modèle, $X_{t-1}, X_{t-2}, \dots, X_{t-p}$ sont les valeurs passées de la série, $\varepsilon_{t-1}, \varepsilon_{t-2}, \dots, \varepsilon_{t-q}$ sont les termes d’erreur retardés et $\varepsilon_t$ est le terme d’erreur aléatoire à l’instant t, supposé être un bruit blanc (moyenne nulle, variance constante, non autocorrélé).
+
+Dans un modèle ARMA($p$, $q$), la complexité des termes autorégressifs et de moyenne mobile crée des décroissances sans coupures nettes dans les fonctions ACF et PACF.
+
+**Modèle ARIMA($p,d,q$) (AutoRegressive Integrated Moving Average)** \newline
+Un modèle ARIMA est un modèle de série temporelle qui combine les composants auto-régressifs (AR), moyenne mobile (MA), et différenciation intégrée (I). Il est utilisé pour modéliser des séries temporelles qui peuvent présenter une tendance et une non-stationnarité (en différenciant les séries pour les rendre stationnaires). Soit $X_t$ une série temporelle, un modèle ARIMA d’ordre ($p, d, q$) où $p$ est l’ordre de l’autorégression, $q$ est l’ordre de la moyenne mobile et $d$ est le degré de différenciation nécessaire, est défini par :
+$$
+(1 - \phi_1 B - \phi_2 B^2 - \dots - \phi_p B^p)(1 - B)^d X_t = (1 + \theta_1 B + \theta_2 B^2 + \dots + \theta_q B^q)\varepsilon_t
+$$
+où $X_t$ est la valeur de la série temporelle à l’instant $t$, $\phi_1, \phi_2, \dots, \phi_p$ sont les coefficients autorégressifs (AR), $\varepsilon_t$ est le terme d’erreur (ou bruit blanc) à l’instant $t$, $\theta_1, \theta_2, \dots, \theta_q$ sont les coefficients de la composante de moyenne mobile (MA) et $B$ est l’opérateur de décalage.
+
+Le modèle ARIMA est donc une combinaison d’un modèle AR pour les dépendances linéaires, d’un modèle MA pour les erreurs et d’une intégration pour rendre la série stationnaire. L’ACF et la PACF montrent des comportements typiques après différenciation et peuvent être utilisés pour identifier les ordres $p$ et $q$.
+
+**Modèle SARIMA($p, d, q$)($P, D, Q$)[$s$] (Seasonal ARIMA)** \newline
+Le modèle SARIMA est une extension du modèle ARIMA pour les séries temporelles qui présentent une saison ou des motifs répétitifs à intervalles réguliers et la capture en ajoutant des composantes saisonnières au modèle ARIMA classique. Soit $X_t$ une série temporelle, un modèle SARIMA d’ordre ($p, d, q$)($P, D, Q$)[$s$] où ($p, s, q$) sont les ordres pour la composante saisonnière, ($P, D, Q$) sont les ordres de la composante saisonnière et $s$ est la périodicité saisonnière, est défini par :
+$$ \begin{aligned}
+(1 - \phi_1 B - \phi_2 B^2 - \dots - \phi_p B^p)(1 - B)^d X_t = ( 1 + \theta_1 B + \theta_2 B^2 + &\dots + \theta_q B^q ) \varepsilon_t \\
+&\times (1 - \Phi_1 B^s - \Phi_2 B^{2s} - \dots - \Phi_P B^{Ps})(1 - B^s)^D
+\end{aligned}$$
+où $X_t$ est la série temporelle observée à l’instant $t$, $B$ est l’opérateur de décalage, $\varepsilon_t$ est le terme d’erreur, $\phi_1, \phi_2, \dots, \phi_p$ sont les coefficients AR non saisonniers, $\theta_1, \theta_2, \dots, \theta_q$ sont les coefficients MA non saisonniers, $\Phi_1, \Phi_2, \dots, \Phi_P$ sont les coefficients AR saisonniers, $(1 - B)^d$ et $(1 - B^s)^D$ représentent respectivement les opérations de différenciation non saisonnière et saisonnière.
+
+Dans un modèle SARIMA, l’ACF montre s’il existe une saisonnalité qui nécessite une différenciation saisonnière. En appliquant cette dernière, les ACF et PACF permettent d'identifier les ordres saisonniers $P$ et $Q$ : si la PACF montre un pic significatif à des multiples de $s$, cela est caractéristique d'un modèle AR($P$) saisonnier, si l’ACF montre un pic significatif à des multiples de $s$, cela indique un modèle MA($Q$) saisonnier.
+
+**Sélection du modèle en fonction de l'ACF et la PACF** (après stationnarisation)
+
+| Modèle                                          | ACF                                  | PACF                                | Différenciations nécessaires |
+|-------------------------------------------------|--------------------------------------|-------------------------------------|-----------------------------|
+| **AR($p$)**                                     | Décroît lentement                    | Zéro après \( p \) retards | Aucune                    |
+| **MA($q$)**                                     | Zéro après \( q \) retards  | Décroît lentement                   | Aucune                             |
+| **ARMA($p$, $q$)**                              | Zéro après \( q \) retards     | Zéro après \( p \) retards       | Aucune       |
+| **ARIMA($p$, $d$, $q$)**                        | Zéro après \( q \) retards ou décroît lentement | Zéro après \( p \) retards ou décroît lentement | \( d \) ordinaires |
+| **SARIMA($p$, $d$, $q$)($P, D, Q$)[$s$]**       | Zéro après \( q \) retards ou décroît lentement  \
+Zéro après \( Q \) retards ou décroît lentement (échelle saisonnière) | Zéro après \( p \) retards ou décroît lentement  \
+Zéro après \( P \) retards ou décroît lentement (échelle saisonnière) | \( d \) ordinaires  \
+\( D \) saisonnières de période $s$|
+
+Une fois le type et les ordres du modèles identifiés, les paramètres $\phi$ et $\theta$ peuvent être estimés à l’aide de méthodes telles que la méthode des moindres carrés ordinaires (OLS) ou des algorithmes plus avancés comme l’estimation de maximum de vraisemblance (MLE). Pour se faire numériquement, la fonction `arima` en `R` applique une méthode MLE.
+
+Afin de choisir le meilleur modèle, on pourra les comparer suivant deux critères :
+
+**AIC (Akaike Information Criterion, Akaike, 1973)** \newline
+Le critère d’information d’Akaike (AIC) est défini par la formule suivante :
+$$\text{AIC} = -2\ln(L) + 2k$$
+où $L$ est la vraisemblance maximale du modèle et $k$ est le nombre de paramètres estimés dans le modèle.
+Le terme $-2\ln(L)$ mesure la qualité de l’ajustement du modèle, tandis que le terme $2k$ pénalise les modèles avec un plus grand nombre de paramètres pour éviter le surajustement.
+
+**BIC (Bayesian Information Criterion, Shwartz, 1978)** \newline
+Le critère d’information bayésien (BIC) est défini par la formule suivante :
+$$\text{BIC} = -2\ln(L) + k\ln(n)$$
+où $L$ est la vraisemblance maximale du modèle, $k$ est le nombre de paramètres estimés dans le modèle et $n$ est le nombre d’observations dans les données.
+Le terme $k\ln(n)$ pénalise les modèles avec plus de paramètres de manière plus sévère que l’AIC, ce qui favorise les modèles plus simples, surtout lorsque la taille de l’échantillon $n$ est grande.
+
+On choisira le modèle avec les plus faibles valeurs d'AIC et/ou BIC : \newline
+- L'AIC peut parfois favoriser des modèles plus complexes parce qu’il pénalise moins fortement l’ajout de paramètres (seulement $2k$). Il suggère le modèle qui devrait avoir la meilleure capacité prédictive pour les données observées, mais aussi risque de surajuster les données d’entraînement. \newline
+- Le BIC peut aider à éviter le surajustement dans un problème où un modèle trop complexe s’adapte trop étroitement aux données d’entraînement et ne généralise pas bien aux nouvelles données.
+	
+La fonction `auto.arima` en `R` est capable à la fois de déterminer automatiquement les ordres $p$, $d$ et $q$ et d’estimer les paramètres du modèle. Elle utilise entre autres les critères d’information (par défaut l’AIC) pour sélectionner le meilleur modèle en termes de compromis entre ajustement et complexité.
+
+**Validation de modèle** \newline
+Afin de s’assurer que le modèle est approprié pour les données et qu’il fournit des prévisions fiables, il faut analyser les résidus du modèles et vérifier qu'ils correspondent à un bruit blanc. En d'autres termes, il faut vérifier qu'ils soient non autocorrélés, normalement distribués avec une moyenne nulle et une variance constante. Cela se vérifie graphiquement notamment à l'aide de l'ACF pour l'autocorrélation et d'un histogramme pour la distribution, et grâce au test de Ljung-Box.
+
+**Test de Ljung-Box** \newline
+Le test de Ljung-Box est un test statistique utilisé pour évaluer si les résidus d’un modèle sont indépendants et aléatoires, donc l'absence d'autocorrélation. Il est basé sur la statistique suivante :
+$$
+Q = n(n+2) \sum_{k=1}^{h} \frac{r_k^2}{n-k}
+$$
+où $n$ est la taille de l’échantillon (nombre d’observations), $r_k$ est l’autocorrélation des résidus à l’ordre $k$ et $h$ est le nombre de lags que l'on souhaite tester. La somme est effectuée pour chaque lag $k$ de $1$ à $h$. \newline
+- Hypothèse nulle $H_0$ : Les résidus ne présentent pas d’autocorrélation significative à l’ordre $k$, c’est-à-dire qu’ils sont indépendants. \newline
+- Hypothèse alternative $H_1$ : Les résidus présentent une autocorrélation significative, indiquant que le modèle n’a pas capturé toute la structure d’autocorrélation.
+
+```{r autocorrelation functions plots, echo=FALSE}
+autocorrelation_plots <- function(data, value_col, title) {
+  par(mfrow = c(1, 2), mar = c(3, 3, 2.5, 1))
+  acf_results <- acf(na.omit(data[[value_col]]), plot = FALSE)
+  plot(acf_results, type = "h", xlab = "", ylab = "", main = "", cex.main = 0.3, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE, xlim = c(1, max(acf_results$lag)), ylim = c(min(acf_results$acf[-1]), max(acf_results$acf[-1])))
+  
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Lag", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("ACF", side = 2, line = 2, cex = 0.6, col = "black") 
+  mtext(paste("ACF"), font = 2, side = 3, line = 0.5, cex = 0.8, col = "black")
+  
+  pacf_plot <- pacf(na.omit(data[[value_col]]), plot = FALSE)
+  plot(pacf_plot, xlab = "", ylab = "", main = "", cex.main = 0.3, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Lag", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("Partial ACF", side = 2, line = 2, cex = 0.6, col = "black") 
+  mtext(paste("PACF"), font = 2, side = 3, line = 0.5, cex = 0.8, col = "black")
+  mtext(title, outer = TRUE, cex = 1, line = -1, font = 2)
+}
+```
+```{r arima model name function, echo=FALSE}
+get_arima_model_name <- function(model) {
+  # Extraire les paramètres du modèle
+  p <- model$arma[1]
+  q <- model$arma[2]
+  d <- model$arma[6]
+  P <- model$arma[3]
+  Q <- model$arma[4]
+  D <- model$arma[7]
+  s <- model$arma[5]
+  
+  # Construire la partie non saisonnière
+  if (d == 0) {
+    if (p > 0 && q == 0) {arima_name <- paste("AR(", p, ")", sep = "")}
+    else if (p == 0 && q > 0) {arima_name <- paste("MA(", q, ")", sep = "")} 
+    else {arima_name <- paste("ARMA(", p, ", ", q, ")", sep = "")}
+  } 
+  else {arima_name <- paste("ARIMA(", p, ", ", d, ", ", q, ")", sep = "")}
+  
+  # Ajouter la partie saisonnière si elle est présente
+  if (P > 0 || Q > 0 || D > 0) {
+    sarima_name <- paste("(", P, ", ", D, ", ", Q, ")[", s, "]", sep = "")
+    arima_name <- paste("SARIMA(", p, ", ", d, ", ", q, ")", sarima_name, sep = "")
+  }
+  return(arima_name)
+}
+```
+```{r model compararison function, echo=FALSE}
+compare_models <- function(candidates, subtitle){
+  comparison_table <- data.frame(
+    Model = sapply(candidates, get_arima_model_name),
+    AIC = sapply(candidates, AIC),
+    BIC = sapply(candidates, BIC)
+  )
+  #title <- textGrob("Comparison of ARIMA/SARIMA Models", gp = gpar(fontsize = 12, font = 2))
+  #table <- tableGrob(comparison_table)
+  #table_height <- unit(nrow(comparison_table), "lines")
+  #grid.arrange(title, table, ncol = 1, heights = unit(c(5, table_height), "lines"))
+  kable(comparison_table, format = "latex", booktabs = TRUE, caption = paste("Comparaison de modèles ARIMA pour le ", subtitle))
+}
+```
+
+### Modèle 1
+
+Analysons les fonctions ACF et PACF de la composante résiduelle du modèle 1.
+```{r m1 ACF and PACF plots, fig.width=10, fig.height=3, out.width="100%", echo=FALSE}
+# Plot ACF and PACF to find model candidates
+autocorrelation_plots(train_data, "m1_residuals_adjust", "Model 1 residual series autocorrelation")
+```
+Les graphes montrent une autocorrélation faible au lag 1, c'est le seul lag significatif à court terme. Les autocorrelations significatives aux lags 12 et 14 peuvent suggérer une saisonnalité résiduelle ou une structure cyclique non capturée par la décomposition, et peuvent être liées à des dépendances temporelles complexes ou la présence de valeurs atypiques. Les autres lags ne montrent pas de significativité, ce qui confirme la stationnarité de la composante résiduelle.
+
+Les autocorrélations à peine significatives au lag 1 peuvent indiquer une composante autorégressive faible d’ordre 1 (AR(1)) ou une composante de moyenne mobile d’ordre 1 (MA(1)), ou les deux (ARMA(1, 1)). Les autocorrélations significatives aux lags 12 et 14 suggèrent une composante saisonnière potentielle d’ordre saisonnier ($S=12$), pouvant être ajoutée.
+
+On ajuste chacun de ces modèles pour comparer leur critères d'information.
+
+```{r m1 model candidates, fig.width=10, out.width="40%", fig.align="center", echo=FALSE}
+candidates <- list()
+candidates[[1]] <- Arima(train_data$m1_residuals_adjust, order = c(1, 0, 0), include.mean = FALSE) # ARIMA(1,0,0) ou AR(1)
+candidates[[2]] <- Arima(train_data$m1_residuals_adjust, order = c(0, 0, 1), include.mean = FALSE) # ARIMA(0,0,1) ou MA(1)
+candidates[[3]] <- Arima(train_data$m1_residuals_adjust, order = c(1, 0, 1), include.mean = FALSE) # ARIMA(1,0,1) ou ARMA(1,1)
+candidates[[4]] <- Arima(train_data$m1_residuals_adjust, order = c(1, 0, 0), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,0)(0,0,1)[12]
+candidates[[5]] <- Arima(train_data$m1_residuals_adjust, order = c(0, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(0,0,1)(0,0,1)[12]
+candidates[[6]] <- Arima(train_data$m1_residuals_adjust, order = c(1, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,1)(0,0,1)[12]
+m1_residuals_adjust_ts <- ts(train_data$m1_residuals_adjust, frequency = monthly_freq, start = train_start_date)
+candidates[[7]] <-  auto.arima(m1_residuals_adjust_ts, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+rm(m1_residuals_adjust_ts)
+compare_models(candidates, "Modèle 1")
+```
+
+Parmi eux, le modèle avec la meilleure performance BIC est le modèle AR(1) avec composante saisonnière de période $S = 12$ et celui avec la meilleure performance AIC est le modèle ARMA(1,1) avec composante saisonnière. Cela nous donne une première indication du meilleur modèle et en particulier qu'un modèle avec saisonnalité est peut être plus adapté. C'est pourquoi on lance également une recherche exhaustive avec `auto.arima` en configurant une exploration dans les modèles saisonniers. La fonction sélectionne un modèle SARIMA(2,0,0)(0,0,1)[12] (ligne 7) qui a des valeurs AIC et BIC significativement inférieures à celles du modèle choisi à priori. Ce modèle capture donc mieux des subtilités dans les données, il sera donc retenu. 
+
+```{r m1 model selection, echo=FALSE}
+# Model selection
+m1_residuals_model <- candidates[[7]]
+```
+
+Pour valider ce modèle, on procède à un diagnostic de ses résidus.
+
+```{r m1 model validation, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results='asis'}
+# Model validation
+check_residuals <- function(model){
+  test_output <- capture.output(checkresiduals(model, plot = TRUE))
+  p_value <- as.numeric(sub(".*p-value = ([0-9.]+).*", "\\1", test_output[grep("p-value", test_output)]))
+  cat("Ljung-Box test on Residuals from", get_arima_model_name(model), "p-value:", p_value, "  \n  \n")
+}
+check_residuals(m1_residuals_model)
+```
+Les résidus oscillent autour de zéro sans tendance apparente ni saisonnalité, et leur distribution est normale. Le test de Ljung-Box (p-value = 0.7573 > 0.05) indique que les résidus sont indépendants. Bien que le lag 14 soit à peine significatif dans l'ACF, on peut considérer qu'il soit négligeable car le modèle est globalement performant et possède les meilleurs critères (AIC/BIC et erreur de prédiction). Dans une analyse plus approfondie, on pourrait vérifier si cette corrélation est dûe à un bruit aléatoire (en modifiant la fenêtre d'entrainement par exemple), à une variable exogène et si la capturer augmenterait considérablement la qualité des prévisions.
+
+### Modèle 2
+
+Pour la composante résiduelle du modèle 2, les fonctions ACF et PACF sont très similaires au modèle précédent. 
+
+```{r m2 ACF and PACF plots, fig.width=10, fig.height=3, out.width="100%", echo=FALSE}
+# Plot ACF and PACF to find model candidates
+autocorrelation_plots(train_data, "m2_residuals", "Model 2 residual series autocorrelation")
+```
+On peut par conséquent sélectionner les mêmes modèles candidats :
+
+```{r m2 model candidates, fig.width=10, out.width="40%", fig.align="center", echo=FALSE}
+candidates <- list()
+candidates[[1]] <- Arima(train_data$m2_residuals, order = c(1, 0, 0), include.mean = FALSE) # ARIMA(1,0,0) ou AR(1)
+candidates[[2]] <- Arima(train_data$m2_residuals, order = c(0, 0, 1), include.mean = FALSE) # ARIMA(0,0,1) ou MA(1)
+candidates[[3]] <- Arima(train_data$m2_residuals, order = c(1, 0, 1), include.mean = FALSE) # ARIMA(1,0,1) ou ARMA(1,1)
+candidates[[4]] <- Arima(train_data$m2_residuals, order = c(1, 0, 0), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,0)(0,0,1)[12]
+candidates[[5]] <- Arima(train_data$m2_residuals, order = c(0, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(0,0,1)(0,0,1)[12]
+candidates[[6]] <- Arima(train_data$m2_residuals, order = c(1, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,1)(0,0,1)[12]
+m2_residuals_adjust_ts <- ts(train_data$m2_residuals, frequency = monthly_freq, start = train_start_date)
+candidates[[7]] <- auto.arima(m2_residuals_adjust_ts, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+rm(m2_residuals_adjust_ts)
+compare_models(candidates, "Modèle 2")
+```
+Les résultats des critères de performances indiquent le modèle SARIMA(1,0,1)(0,0,1)[12] comme le meilleur en termes d'AIC et BIC. De même que pour le modèle 1, la recherche exhaustive fourni par `auto.arima` (ligne 7) sélectionne le modèle SARIMA(2,0,0)(0,0,1)[12]. Cela est cohérent avec les techniques de décomposition qui ont été utilisées (régressions et moyennes de groupe pour les deux modèles), rendant les décompositions des modèles 1 et 2 similaires jusqu'à présent. Puisque le modèle 2, se veut plus simple et rapide, nous pouvons envisager de modéliser la composante résiduelle avec un modèle simple sans composante saisonnière. L'idée est de considérer ici que la saisonnalité des résidus n'est pas significative et que malgré les performances de prévisions d'un modèle saisonnier, opter pour un modèle plus général pourrait éviter un problème de surajustement. On utilisera alors le meilleur modèle simple, le modèle AR(1).
+
+```{r m2 model selection, echo=FALSE}
+m2_residuals_model <- candidates[[1]]
+```
+On procède au diagnostic des résidus.
+```{r m2 model validation, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results='asis'}
+# Model validation :
+check_residuals(m2_residuals_model)
+```
+Le lag significatif (lag 12) anticipé suggère une saison non complètement capturée mais son amplitude de corrélation reste raisonnablement faible. Les autres tests montrent l'indépendance et la normalité des résidus, renforçant la validité du modèle. Puisque l'objectif est la prévision, on peut envisager de valider ce modèle si le lag significatif n'affecte pas la capacité prédictive du modèle, ce que l'on analysera sur l'échantillon de test. 
+
+### Modèle 3
+
+Les fonctions ACF et PACF pour le modèle 3 montrent également un signe de saisonnalité mais une plus forte corrélation au lag 1 que les prédécents:
+```{r m3 ACF and PACF plots, fig.width=10, fig.height=3, out.width="100%", echo=FALSE}
+# Plot ACF and PACF to find model candidates
+autocorrelation_plots(train_data, "m3_residuals_adjust", "Model 3 residual series autocorrelation")
+```
+
+Comparons les modèles candidats ainsi que le modèle choisi par `auto.arima` (ligne 7).
+
+```{r m3 model candidates, fig.width=10, out.width="40%", fig.align="center", echo=FALSE}
+candidates <- list()
+candidates[[1]] <- Arima(train_data$m3_residuals_adjust, order = c(1, 0, 0), include.mean = FALSE) # ARIMA(1,0,0) ou AR(1)
+candidates[[2]] <- Arima(train_data$m3_residuals_adjust, order = c(0, 0, 1), include.mean = FALSE) # ARIMA(0,0,1) ou MA(1)
+candidates[[3]] <- Arima(train_data$m3_residuals_adjust, order = c(1, 0, 1), include.mean = FALSE) # ARIMA(1,0,1) ou ARMA(1,1)
+candidates[[4]] <- Arima(train_data$m3_residuals_adjust, order = c(1, 0, 0), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,0)(0,0,1)[12]
+candidates[[5]] <- Arima(train_data$m3_residuals_adjust, order = c(0, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(0,0,1)(0,0,1)[12]
+candidates[[6]] <- Arima(train_data$m3_residuals_adjust, order = c(1, 0, 1), seasonal = list(order = c(0, 0, 1), period = 12), include.mean = FALSE) # SARIMA(1,0,1)(0,0,1)[12]
+m3_residuals_adjust_ts <- ts(train_data$m3_residuals_adjust, frequency = monthly_freq, start = train_start_date)
+candidates[[7]] <- auto.arima(m3_residuals_adjust_ts, stepwise = FALSE, approximation = FALSE, seasonal = TRUE)
+rm(m3_residuals_adjust_ts)
+compare_models(candidates, "Modèle 3")
+```
+D'après ces résultats, on gardera le modèle SARIMA(1,0,0)(0,0,1)[12] et on vérifie les résidus :
+
+```{r m3 model selection, echo=FALSE}
+# Model selection
+m3_residuals_model <- candidates[[4]]
+```
+
+```{r m3 model validation, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results='asis'}
+# Model validation
+check_residuals(m3_residuals_model)
+```
+La validation du modèle montre que tous les tests sont satisfaisants : les résidus suivent une distribution normale, ils sont indépendants (aucun lag significatif dans l’ACF des résidus), et le test de Ljung-Box confirme l’absence d’autocorrélation significative. Par conséquent, le modèle peut être considéré comme valide.
+
+## Prévisions et erreurs
+
+Afin de faire des prévisions, il suffit d'additionner les prévisions des modèles pour chaque composantes. La composante saisonnière étant stable et régulière, on prolonge le pattern saisonnier observé dans les données pour prévoir les futures fluctuations saisonnières. On compare ensuite les résultats des prévisions avec les réelles données de l'échantillon de test (non utilisées pour ajuster le modèle). Cela permettra d'évaluer les capacités prédictives de nos modèles en comparant les métriques d'erreur telles que le RMSE (Root Mean Square Error), MAE (Mean Absolute Error), MAPE (Mean Absolute Percentage Error), etc.
+
+```{r forecast plot function, echo=FALSE}
+plot_forecast <- function(forecast_data, subtitle){
+  par(mar = c(4, 6, 2, 8))
+  plot(x = forecast_data$month_start, y = forecast_data$monthly_elec, type = "l", lty = 1, col = "blue", lwd = 2, xlab = "", ylab = "", ylim = c(min(forecast_data$lower_forecasts, forecast_data$monthly_elec), max(forecast_data$upper_forecasts, forecast_data$monthly_elec)), main = paste("Electricity Consumption Forecast with", subtitle), cex.main = 1, axes = TRUE, las = 1, col.axis = "darkgray", cex.axis = 0.8, frame.plot = FALSE)
+  lines(x = forecast_data$month_start, y = forecast_data$forecasts, lty = 1, col = "red", lwd = 2)
+  polygon(c(forecast_data$month_start, rev(forecast_data$month_start)), c(forecast_data$upper_forecasts, rev(forecast_data$lower_forecasts)), col = rgb(1, 0, 0, 0.1), border = NA)
+  box(col = "darkgray")
+  grid(nx = NULL, ny = NULL, col = "lightgray", lty = "solid", lwd = 0.5)
+  mtext("Date", side = 1, line = 2, cex = 0.6, col = "black")
+  mtext("Electricity (MW)", side = 2, line = 3.5, cex = 0.6, col = "black")
+  legend("topright", legend = c("Actual Test Data", "Forecast", "95% Conf. Int."), col = c("blue", "red", rgb(1, 0, 0, 0.1)), lty = c(1, 1, 1), lwd = c(2, 2, 8), cex = 0.8, bty = "n", xpd = TRUE, inset = c(-0.22, 0.3))
+}
+```
+```{r error metrics function, echo=FALSE}
+print_error <- function(forecasts_df, subtitle){
+  error_metrics <- accuracy(forecasts_df$monthly_elec, forecasts_df$forecasts)
+  error_metrics_df <- as.data.frame(error_metrics)
+  # title <- textGrob("Error metrics on test data set", gp = gpar(fontsize = 12, font = 2))
+  # table <- tableGrob(error_metrics_df)
+  # grid.arrange(title, table, ncol = 1, heights = unit(c(1, 3), "lines"))
+  kable(error_metrics_df, format = "latex", booktabs = TRUE, caption = paste("Erreur de prévision sur l'échantillon de test pour le", subtitle))
+}
+
+print_error <- function(forecasts_list, subtitles) {
+  if (is.data.frame(forecasts_list)) {
+    forecasts_list <- list(forecasts_list)
+  }
+  error_metrics_df <- data.frame()
+  if (length(forecasts_list) != length(subtitles)) {
+    stop("La longueur de forecasts_list doit être égale à celle de subtitles.")
+  }
+  for (i in seq_along(forecasts_list)) {
+    error_metrics <- accuracy(forecasts_list[[i]]$monthly_elec, forecasts_list[[i]]$forecasts)
+    error_metrics_row <- as.data.frame(error_metrics)
+    error_metrics_df <- rbind(error_metrics_df, error_metrics_row)
+  }
+  if (length(forecasts_list) > 1){
+    rownames(error_metrics_df) <- subtitles
+    kable(error_metrics_df, format = "latex", booktabs = TRUE, caption = "Comparaison d'erreurs de prévision sur l'échantillon de test")
+  }
+  else {
+    kable(error_metrics_df, format = "latex", booktabs = TRUE, caption = paste("Erreur de prévision sur l'échantillon de test pour le", subtitles))
+  }
+}
+```
+
+**Modèle 1**
+$$X^1_t = T^1_t + S^1_t + R^1_t$$
+où $T^1_t$ est une droite de régression linéaire, $S^1_t$ est un motif saisonnier stable de période 12 et $R^1_t$ est un modèle SARIMA(2,0,0)(0,0,1)[12].
+
+```{r m1 previsions, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Generates forecasts on test_data combining trend, seasonality and residuals components
+forecasts_residuals <- forecast(m1_residuals_model, h = nrow(test_data))
+m1_forecast <- test_data %>%
+  mutate(trend = as.numeric(predict(m1_trend_model, newdata = test_data)),
+         seasonal = rep(train_data$m1_seasonal[1:12], length.out = nrow(test_data)),
+         residuals = as.numeric(forecasts_residuals$mean),
+         residuals_lower = as.numeric(forecasts_residuals$lower[,2]),
+         residuals_upper = as.numeric(forecasts_residuals$upper[,2]),
+         forecasts = trend + seasonal + residuals,
+         lower_forecasts = trend + seasonal + residuals_lower,
+         upper_forecasts = trend + seasonal + residuals_upper,
+         )
+rm(forecasts_residuals)
+
+# Plot forecasts against actual values
+plot_forecast(m1_forecast, "Model 1")
+print_error(m1_forecast, "Modèle 1")
+```
+
+**Modèle 2**
+$$X^2_t = T^2_t + S^2_t + R^2_t$$
+où $T^2_t$ est une droite de régression linéaire, $S^2_t$ est un motif saisonnier stable de période 12 et $R^2_t$ est un modèle AR(1).
+
+```{r m2 previsions, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Generates forecasts on test_data combining trend, seasonality and residuals components
+forecasts_residuals <- forecast(m2_residuals_model, h = nrow(test_data))
+m2_forecast <- test_data %>%
+  mutate(trend = as.numeric(predict(m2_trend_model, newdata = test_data)),
+         seasonal = rep(train_data$m2_seasonal[1:12], length.out = nrow(test_data)),
+         residuals = as.numeric(forecasts_residuals$mean),
+         residuals_lower = as.numeric(forecasts_residuals$lower[,2]),
+         residuals_upper = as.numeric(forecasts_residuals$upper[,2]),
+         forecasts = trend + seasonal + residuals,
+         lower_forecasts = trend + seasonal + residuals_lower,
+         upper_forecasts = trend + seasonal + residuals_upper)
+rm(forecasts_residuals)
+
+# Plot forecasts against actual values
+plot_forecast(m2_forecast, "Model 2")
+print_error(m2_forecast, "Modèle 2")
+```
+
+**Modèle 3**
+$$X^3_t = T^3_t + S^3_t + R^3_t$$
+où $T^3_t$ est une droite de régression linéaire, $S^3_t$ est un motif saisonnier stable de période 12 et $R^3_t$ est un modèle SARIMA(1,0,0)(0,0,1)[12].
+
+```{r m3 previsions, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Generates forecasts on test_data combining trend, seasonality and residuals components
+forecasts_residuals <- forecast(m3_residuals_model, h = nrow(test_data))
+m3_forecast <- test_data %>%
+  mutate(trend = as.numeric(predict(m3_trend_model, newdata = test_data)),
+         seasonal = rep(train_data$m3_seasonal[1:12], length.out = nrow(test_data)),
+         residuals = as.numeric(forecasts_residuals$mean),
+         residuals_lower = as.numeric(forecasts_residuals$lower[,2]),
+         residuals_upper = as.numeric(forecasts_residuals$upper[,2]),
+         forecasts = trend + seasonal + residuals,
+         lower_forecasts = trend + seasonal + residuals_lower,
+         upper_forecasts = trend + seasonal + residuals_upper)
+rm(forecasts_residuals)
+
+# Plot forecasts against actual values
+plot_forecast(m3_forecast, "Model 3")
+print_error(m3_forecast, "Modèle 3")
+```
+Chacun des modèles semble émettre des prévisions très satisfaisantes sur les données de tests. En effet, la courbe prévisionnelle suit la même allure que les données réelles et l'intervalle de confiance 95% englobe la quasi-totalité de cette dernière. Sur la base des métriques d’erreur (ME, RMSE, MAE, MPE, MAPE), le modèle 2 est clairement le plus performant en termes de prévision. Il minimise les erreurs absolues, quadratiques et relatives par rapport aux autres modèles. C’est par conséquent le modèle à privilégier, d’autant plus qu’il est plus simple et plus rapide que les autres puisqu’il n’applique pas de lissage LOESS ou de décomposition préliminaire pour la tendance et que sa composante résiduelle est modélisée par un simple modèle AR(1) avec peu de paramètres. Bien que son ajustement aux données de l’échantillon d’entraînement n’était pas à la hauteur des autres modèles, il parvient à mieux prédire les valeurs futures et constitue l’exemple qu’un modèle simple permet d’éviter un surajustement dans l'objectif de faire des prévisions. De plus, les tests complémentaires (analyse des résidus, etc.) confirment la validité de ce modèle pour les données analysées.
+
+# Modélisation SARIMA
+
+Comme expliqué précédemment, la série temporelle n’est pas stationnaire. Nous allons essayer un modèle SARIMA avec une saisonnalité de 12.
+
+## Modèle 4 - Identification du modèle via l'ACF et la PACF
+
+Les graphiques de l’Autocorrélation (ACF) et de l’Autocorrélation Partielle (PACF) des données différenciées aident à identifier les ordres potentiels des composants AR (autorégressif) et MA (moyenne mobile) du modèle ARIMA.
+
+```{r m4 ACF and PACF plots, fig.width=10, fig.height=3, out.width="100%", echo=FALSE}
+# Création de l'objet de série temporelle pour les données d'entraînement
+train_ts <- ts(train_data$monthly_elec, start = train_start_date, frequency = monthly_freq)
+# Différenciation non saisonnière puis saisonnière
+diff_seasonal_train_ts <- diff(train_ts, differences = 1, lag = 12)  # Différenciation saisonnière
+diff_df <- data.frame(Value = as.numeric(diff_seasonal_train_ts))
+# Plot ACF and PACF to find model candidates
+autocorrelation_plots(diff_df, "Value", "Modèle 4 - Autocorrelation des données différenciées (d = 0, D = 1)")
+```
+
+Afin de déterminer les paramètres $p$, $q$, $P$ et $Q$ du modèle SARIMA, une différentiation saisonnière est effectuée. Ainsi, grâce à ces deux graphes, nous pouvons estimer ces paramètres, bien que différents choix soient possibles. Étant donné l’ACF et le PACF, nous pouvons supposer que le modèle SARIMA(2,0,1)(1,1,1)[12] est un modèle raisonnable. Voici une simulation de ce modèle : 
+
+```{r m4 model selection, echo=FALSE}
+# Définition des paramètres du modèle SARIMA
+order <- c(2, 0, 1)          # Paramètres p, d, q
+seasonal_order <- c(1, 1, 1) # Paramètres P, D, Q et fréquence
+# Ajustement du modèle
+m4_model <- Arima(train_ts, order = order, seasonal = list(order = seasonal_order, period = 12), method = "ML")
+# Résumé du modèle
+#summary(m4_model)
+rm(order, seasonal_order)
+```
+```{r m4 model validation, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results='asis'}
+# Diagnostic des résidus
+check_residuals(m4_model)
+```
+
+On observe que le modèle SARIMA(2,0,1)(1,1,1)[12] semble acceptable. Les graphiques suggèrent que les résidus ressemblent à un bruit blanc : leur moyenne semble être proche de 0, et le test de Ljung-Box indique qu'ils ne présentent aucune autocorrélation. On pourrait même ajouter que l'histogramme laisse penser que les résidus suivent une loi normale.
+
+```{r m4 previsions, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Generates forecasts on test_data combining trend, seasonality and residuals components
+forecasts_results <- forecast(m4_model, h = nrow(test_data))
+m4_forecast <- test_data %>%
+  mutate(forecasts = as.numeric(forecasts_results$mean),
+         lower_forecasts = as.numeric(forecasts_results$lower[,2]),
+         upper_forecasts = as.numeric(forecasts_results$upper[,2]),
+         )
+rm(forecasts_results)
+
+# Plot forecasts against actual values
+plot_forecast(m4_forecast, "Model 4")
+print_error(m4_forecast, "Modèle 4")
+```
+
+## Modèle 5 - Ajustement automatique
+
+La fonction `auto.arima` du package `forecast` sélectionne automatiquement le meilleur modèle SARIMA en fonction des critères d’information (comme AIC, BIC). Les paramètres spécifiés permettent de contrôler la complexité du modèle, notamment les ordres maximaux des termes autorégressifs ($p, P$) et de moyenne mobile ($q, Q$), ainsi que la complexité totale (`max.order`).
+
+Le résumé fournit des détails sur les coefficients estimés, les erreurs standard, le `sigma^2` (variance des résidus), le log-vraisemblance, et les critères d’information. Ces informations sont cruciales pour évaluer la qualité du modèle ajusté.
+
+```{r m5 model selection, echo=FALSE}
+# Ajustement du modèle ARIMA en utilisant auto.arima()
+m5_model <- auto.arima(train_ts,
+                          seasonal = TRUE,         # Prise en compte de la saisonnalité
+                          stepwise = TRUE,         # Utilisation d'une approche pas à pas pour la sélection
+                          approximation = TRUE,   # Utilisation d'approximations pour accélérer le calcul
+                          max.p = 13,              # Ordre maximal pour le terme AR non saisonnier
+                          max.q = 13,              # Ordre maximal pour le terme MA non saisonnier
+                          max.P = 5,               # Ordre maximal pour le terme AR saisonnier
+                          max.Q = 5,               # Ordre maximal pour le terme MA saisonnier
+                          max.order = 40,          # Ordre maximal total du modèle
+                          lambda = NULL)
+
+# Affichage du résumé du modèle
+#summary(m5_model)
+```
+Encore une fois, vérifions que les résidus sont aléatoires et ne présentent pas de structure systématique à travers le test de Ljung-Box pour l’autocorrélation des résidus.
+
+```{r m5 model validation, fig.width=10, fig.height=6, out.width="100%", echo=FALSE, results='asis'}
+# Tracé des résidus et diagnostics
+check_residuals(m5_model)
+```
+Une fois le modèle ajusté et diagnostiqué, l'étape suivante consiste à générer des prévisions. L'horizon de prévision est déterminé par la taille de l'ensemble de test, assurant que les prévisions couvrent la même période que les données réelles pour une comparaison équitable. Le niveau de confiance 95% fournit un intervalle autour des prévisions, offrant une idée de l'incertitude associée.
+
+La visualisation permet de comparer visuellement les prévisions du modèle SARIMA avec les valeurs réelles de consommation d'électricité. En définissant correctement le début de la période de prévision, on s'assure que les séries temporelles sont alignées dans le temps. Le tracé affiche les prévisions en rouge et les valeurs réelles en bleu, avec l'intervalles de confiance, fournissant une évaluation intuitive de la performance du modèle.
+```{r m5 previsions, fig.width=10, fig.height=4, out.width="100%", echo=FALSE}
+# Generates forecasts on test_data combining trend, seasonality and residuals components
+forecasts_results <- forecast(m5_model, h = nrow(test_data))
+m5_forecast <- test_data %>%
+  mutate(forecasts = as.numeric(forecasts_results$mean),
+         lower_forecasts = as.numeric(forecasts_results$lower[,2]),
+         upper_forecasts = as.numeric(forecasts_results$upper[,2]),
+         )
+rm(forecasts_results)
+
+# Plot forecasts against actual values
+plot_forecast(m5_forecast, "Model 5")
+print_error(m5_forecast, "Modèle 5")
+```
+
+Grâce à ce graphique, et surtout à cette table des erreurs, nous comparerons ce modèle aux autres.
+
+# Conclusion
+
+```{r models comparison, echo=FALSE}
+print_error(list(m1_forecast, m2_forecast, m3_forecast, m4_forecast, m5_forecast), c("Modèle 1", "Modèle 2", "Modèle 3", "Modèle 4", "Modèle 5"))
+```
+
+Notre analyse de la consommation d’électricité en France nous a permis de mettre en évidence des dynamiques importantes liées aux tendances, aux variations saisonnières et aux résidus. Les résultats obtenus montrent une forte composante saisonnière, caractéristique des variations des besoins énergétiques, principalement influencées par des facteurs climatiques. Nous avons pu utiliser deux approches, décomposition additive et SARIMA, afin de les comparer et mesurer leur pertinence pour la prévision de la consommation.
+
+Parmi les mesures d'erreur, le MAE et RMSE sont considérés comme les plus fiables, l'un étant le plus stable et robuste et l'autre étant le plus sensible aux valeurs extrêmes. Ces critères mettent en évidence le modèle basé sur une décomposition simple avec un ajustement AR(1) et le modèle saisonnier SARIMA(1, 0, 0)(2, 1, 1)[12]. Ainsi le modèle 2 s'est révélé le plus efficace selon le RMSE, combinant simplicité et précision prédictive. Sa simplicité a permis d'éviter de tomber dans le surajustement et ainsi de mieux généraliser la série que les 4 autres modèles. La saisonnalité fortement marquée de la série de données a également contribué à la performance de la décomposition.
+
+Ces prévisions offrent des perspectives utiles pour la planification énergétique et l’optimisation des ressources. En effet, elles permettent d'anticiper les variations de consommation et de mieux répondre aux besoins futurs.
+
+Une limite importante de notre analyse réside dans le fait que les modèles ont été entraînés sur des données collectées avant la crise sanitaire. Cet événement a potentiellement provoqué des transformations majeures dans les habitudes de consommation d’électricité. Les modèles ne capturent donc pas ces nouvelles dynamiques, ce qui affecte la précision des prévisions.
+
+Pour aller plus loin, il serait pertinent d'intégrer des variables exogènes telles que des données météorologiques ou économiques afin d’améliorer la précision des modèles. La présence de telles variables pourrait préciser l'évolution de la saisonnalité ainsi qu'expliquer la tendance.
+
+# Bibliographie
+
+* Séries temporelles, M2 IFMA (Sorbonne Université, 2024)
+* Analyse des séries financières, J-M. Bardet (M2MO, Université Paris Cité, 2019)
+* Introduction to Time Series and Forecasting, Borckwell-Davis (2nd edition)
+
+# Annexes
+
+```{r annexe1, fig.width=10, fig.height=4.5, out.width="100%", echo=FALSE}
+# Plot STL decomposition results
+plot(stl_evol, main = "STL decomposition with evolutive seasonality using stl()")
+```
+
+```{r annexe2, fig.width=10, fig.height=4.5, out.width="100%", echo=FALSE}
+# Plot STL decomposition results
+plot(stl_fixed, main = "STL decomposition with fixed seasonality using stl()")
+```
+
+```{r annexe3, fig.width=10, fig.height=4.5, out.width="100%", echo=FALSE}
+plot(decomp_result)
+```
