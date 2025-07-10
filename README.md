@@ -1,1 +1,3 @@
 # French-Electricity-Consumption-Forecasting
+
+This project focuses on forecasting monthly electricity consumption in France using classical time series models. It was carried out as part of an academic project aiming to study temporal dynamics and seasonal patterns in energy demand. The methodology relies on ARMA and SARIMA models to capture autocorrelations and seasonality. The work includes data preprocessing, model calibration, diagnostics, and performance evaluation based on out-of-sample forecasting accuracy.
